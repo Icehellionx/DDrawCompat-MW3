@@ -1,4 +1,27 @@
-# DDrawCompat
+# DDrawCompat-MW3
+
+This is the MechWarrior 3 compatibility fork used by
+[MechWarrior 3 Remastered](https://github.com/Icehellionx/MechWarrior-3-Remastered).
+It is based on narzoul's DDrawCompat v0.7.1 and retains the original project
+history and BSD Zero Clause license.
+
+The current qualified release is `v0.7.1-mw3-r18`. It adds narrowly scoped
+MechWarrior 3 and Pirate's Moon presentation, intro-video, Alt-Tab, cursor,
+edge-repair, and startup surface-loss fixes. The upstream `RenderColorDepth`
+mechanism promotes the games' legacy RGB565 render targets to X8R8G8B8.
+
+End users should download the ZIP from this fork's Releases page and follow
+[MW3-FORK.md](MW3-FORK.md). Developers can compare this branch directly with
+the upstream `v0.7.1` tag to inspect every MW3-specific source change.
+
+The profiles under `profiles/` are synchronized from the primary remaster
+repository by GitHub Actions. A profile update does not automatically publish
+a new DLL: renderer binaries must pass the remaster's launch, capture,
+checksum, and Defender qualification before release.
+
+---
+
+# Upstream DDrawCompat
 
 ### Introduction
 DDrawCompat is a DLL wrapper aimed at fixing compatibility and performance issues with the DirectX 1-7 graphics APIs. Partially supports GDI as well. There is no API conversion involved, most of the rendering is still done by the native DirectX 1-7 and GDI libraries.

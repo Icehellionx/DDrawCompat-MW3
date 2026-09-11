@@ -1,4 +1,5 @@
 #include <Common/CompatPtr.h>
+#include <Common/Log.h>
 #include <Config/Settings/FpsLimiter.h>
 #include <Config/Settings/GdiInterops.h>
 #include <D3dDdi/KernelModeThunks.h>
@@ -121,6 +122,29 @@ namespace DDraw
 	HRESULT PrimarySurfaceImpl<TSurface>::AddAttachedSurface(TSurface* This, TSurface* lpDDSAttachedSurface)
 	{
 		HRESULT result = getOrigVtable(This).AddAttachedSurface(This, lpDDSAttachedSurface);
+		if (DDERR_SURFACELOST == result && lpDDSAttachedSurface)
+		{
+			LOG_INFO << "MW3 Remaster: primary surface was transiently lost while attaching a surface; restoring and retrying in-process";
+			static constexpr DWORD retryDelaysMs[] = { 10, 25, 50, 100, 250 };
+			for (DWORD retry = 0; retry < _countof(retryDelaysMs); ++retry)
+			{
+				Sleep(retryDelaysMs[retry]);
+				if (SUCCEEDED(Restore(This)))
+				{
+					result = getOrigVtable(This).AddAttachedSurface(This, lpDDSAttachedSurface);
+					if (SUCCEEDED(result))
+					{
+						LOG_INFO << "MW3 Remaster: primary surface attachment recovered on retry " << retry + 1;
+						break;
+					}
+				}
+			}
+			if (FAILED(result))
+			{
+				LOG_INFO << "MW3 Remaster: primary surface attachment retries exhausted (HRESULT="
+					<< Compat::hex(result) << ')';
+			}
+		}
 		if (SUCCEEDED(result) && !(PrimarySurface::getOrigCaps() & DDSCAPS_3DDEVICE))
 		{
 			TDdsCaps caps = {};
@@ -298,13 +322,43 @@ namespace DDraw
 	template <typename TSurface>
 	HRESULT PrimarySurfaceImpl<TSurface>::GetAttachedSurface(TSurface* This, TDdsCaps* lpDDSCaps, TSurface** lplpDDAttachedSurface)
 	{
+		TDdsCaps adjustedCaps = {};
+		TDdsCaps* caps = lpDDSCaps;
 		if (lpDDSCaps && (this->m_data->getOrigCaps() & DDSCAPS_SYSTEMMEMORY))
 		{
-			TDdsCaps caps = *lpDDSCaps;
-			caps.dwCaps &= ~DDSCAPS_SYSTEMMEMORY;
-			return SurfaceImpl<TSurface>::GetAttachedSurface(This, &caps, lplpDDAttachedSurface);
+			adjustedCaps = *lpDDSCaps;
+			adjustedCaps.dwCaps &= ~DDSCAPS_SYSTEMMEMORY;
+			caps = &adjustedCaps;
 		}
-		return SurfaceImpl<TSurface>::GetAttachedSurface(This, lpDDSCaps, lplpDDAttachedSurface);
+
+		HRESULT result = SurfaceImpl<TSurface>::GetAttachedSurface(This, caps, lplpDDAttachedSurface);
+		if (DDERR_SURFACELOST != result || !lplpDDAttachedSurface)
+		{
+			return result;
+		}
+
+		LOG_INFO << "MW3 Remaster: attached primary surface was transiently lost; restoring and retrying in-process";
+		static constexpr DWORD retryDelaysMs[] = { 10, 25, 50, 100, 250 };
+		for (DWORD retry = 0; retry < _countof(retryDelaysMs); ++retry)
+		{
+			Sleep(retryDelaysMs[retry]);
+			*lplpDDAttachedSurface = nullptr;
+			if (SUCCEEDED(Restore(This)))
+			{
+				result = SurfaceImpl<TSurface>::GetAttachedSurface(This, caps, lplpDDAttachedSurface);
+				if (SUCCEEDED(result))
+				{
+					LOG_INFO << "MW3 Remaster: attached primary surface recovered on retry " << retry + 1;
+					break;
+				}
+			}
+		}
+		if (FAILED(result))
+		{
+			LOG_INFO << "MW3 Remaster: attached primary surface retries exhausted (HRESULT="
+				<< Compat::hex(result) << ')';
+		}
+		return result;
 	}
 
 	template <typename TSurface>

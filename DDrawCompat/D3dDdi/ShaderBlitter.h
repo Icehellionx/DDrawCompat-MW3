@@ -55,6 +55,8 @@ namespace D3dDdi
 			const Resource& srcResource, UINT srcSubResourceIndex, const RECT& srcRect);
 		void displayBlt(Resource& dstResource, UINT dstSubResourceIndex, const RECT& dstRect,
 			const Resource& srcResource, UINT srcSubResourceIndex, const RECT& srcRect);
+		void introChromaCleanupBlt(const Resource& dstResource, UINT dstSubResourceIndex,
+			const RECT& dstRect, const Resource& srcResource, UINT srcSubResourceIndex, const RECT& srcRect);
 		void lanczosBlt(const Resource& dstResource, UINT dstSubResourceIndex, const RECT& dstRect,
 			const Resource& srcResource, UINT srcSubResourceIndex, const RECT& srcRect, UINT lobes);
 		void lockRefBlt(const Resource& dstResource, UINT dstSubResourceIndex, const RECT& dstRect,
@@ -151,6 +153,7 @@ namespace D3dDdi
 		DeviceState::TempShader m_psDepthWrite24;
 		DeviceState::TempShader m_psDitheredGammaControl;
 		DeviceState::TempShader m_psDrawCursor;
+		DeviceState::TempShader m_psIntroChromaCleanup;
 		DeviceState::TempShader m_psLanczos;
 		DeviceState::TempShader m_psLockRef;
 		DeviceState::TempShader m_psPaletteLookup;

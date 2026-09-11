@@ -14,6 +14,7 @@ namespace
 	RECT g_clipRect = {};
 	HCURSOR g_cursor = INVALID_CURSOR;
 	bool g_isEmulated = false;
+	bool g_isSystemCursorHidden = false;
 	RECT g_monitorClipRect = {};
 	HCURSOR g_nullCursor = nullptr;
 	CURSORINFO g_prevCursorInfo = {};
@@ -148,7 +149,7 @@ namespace Gdi
 			ci.cbSize = sizeof(ci);
 
 			Compat::ScopedCriticalSection lock(g_cs);
-			if (g_isEmulated)
+			if (g_isEmulated && !g_isSystemCursorHidden)
 			{
 				CALL_ORIG_FUNC(GetCursorInfo)(&ci);
 				if (ci.hCursor == g_nullCursor)
@@ -199,7 +200,10 @@ namespace Gdi
 
 			HCURSOR prevCursor = g_cursor != INVALID_CURSOR ? g_cursor : CALL_ORIG_FUNC(GetCursor)();
 			g_cursor = cursor;
-			CALL_ORIG_FUNC(SetCursor)(g_isEmulated && cursor ? g_nullCursor : cursor);
+			const HCURSOR displayedCursor = g_isSystemCursorHidden
+				? (g_isEmulated ? g_nullCursor : nullptr)
+				: (g_isEmulated && cursor ? g_nullCursor : cursor);
+			CALL_ORIG_FUNC(SetCursor)(displayedCursor);
 			return LOG_RESULT(prevCursor);
 		}
 
@@ -207,11 +211,35 @@ namespace Gdi
 		{
 			Compat::ScopedCriticalSection lock(g_cs);
 			const auto cursor = CALL_ORIG_FUNC(GetCursor)();
-			const auto expectedCursor = g_isEmulated ? g_nullCursor : g_cursor;
+			const auto expectedCursor = g_isSystemCursorHidden
+				? (g_isEmulated ? g_nullCursor : nullptr)
+				: (g_isEmulated && g_cursor ? g_nullCursor : g_cursor);
 			if (cursor != expectedCursor)
 			{
-				LOG_DEBUG << "Restoring expected cursor " << g_cursor << " instead of " << cursor;
-				SetCursor(INVALID_CURSOR != g_cursor ? g_cursor : cursor);
+				LOG_DEBUG << "Restoring expected cursor " << expectedCursor << " instead of " << cursor;
+				CALL_ORIG_FUNC(SetCursor)(expectedCursor);
+			}
+		}
+
+		void setSystemCursorHidden(bool hidden)
+		{
+			bool changed = false;
+			{
+				Compat::ScopedCriticalSection lock(g_cs);
+				changed = hidden != g_isSystemCursorHidden;
+				g_isSystemCursorHidden = hidden;
+				g_prevCursorInfo = {};
+				const HCURSOR displayedCursor = hidden
+					? (g_isEmulated ? g_nullCursor : nullptr)
+					: (g_isEmulated && g_cursor ? g_nullCursor : g_cursor);
+				CALL_ORIG_FUNC(SetCursor)(displayedCursor);
+			}
+			if (changed)
+			{
+				// Cursor pixels are composited into the presentation surface. Force
+				// one repaint after releasing the cursor lock so a previously drawn
+				// desktop arrow cannot remain frozen over the active game frame.
+				DDraw::RealPrimarySurface::scheduleOverlayUpdate();
 			}
 		}
 
@@ -230,6 +258,10 @@ namespace Gdi
 			POINT pos = {};
 			CALL_ORIG_FUNC(GetCursorPos)(&pos);
 			SetCursorPos(pos.x, pos.y);
+			const HCURSOR displayedCursor = g_isSystemCursorHidden
+				? (g_isEmulated ? g_nullCursor : nullptr)
+				: (g_isEmulated && g_cursor ? g_nullCursor : g_cursor);
+			CALL_ORIG_FUNC(SetCursor)(displayedCursor);
 		}
 
 		void setMonitorClipRect(const RECT& rect)
@@ -272,7 +304,7 @@ namespace Gdi
 				updateClipRect();
 			}
 
-			if (g_isEmulated)
+			if (g_isEmulated && !g_isSystemCursorHidden)
 			{
 				CURSORINFO cursorInfo = getEmulatedCursorInfo();
 				if ((CURSOR_SHOWING == cursorInfo.flags) != (CURSOR_SHOWING == g_prevCursorInfo.flags) ||

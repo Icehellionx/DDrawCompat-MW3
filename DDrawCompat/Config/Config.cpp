@@ -31,6 +31,10 @@
 #include <Config/Settings/PalettizedTextures.h>
 #include <Config/Settings/PresentDelay.h>
 #include <Config/Settings/RenderColorDepth.h>
+#include <Config/Settings/RemasterIntroChromaCleanup.h>
+#include <Config/Settings/RemasterIntroWidescreen.h>
+#include <Config/Settings/RemasterPresentationOverscan.h>
+#include <Config/Settings/RemasterStartupSurfaceClear.h>
 #include <Config/Settings/ResolutionScale.h>
 #include <Config/Settings/ResolutionScaleFilter.h>
 #include <Config/Settings/SoftwareDevice.h>
@@ -96,6 +100,10 @@ namespace Config
 	Settings::PalettizedTextures palettizedTextures;
 	Settings::PresentDelay presentDelay;
 	Settings::RenderColorDepth renderColorDepth;
+	Settings::RemasterIntroChromaCleanup remasterIntroChromaCleanup;
+	Settings::RemasterIntroWidescreen remasterIntroWidescreen;
+	Settings::RemasterPresentationOverscan remasterPresentationOverscan;
+	Settings::RemasterStartupSurfaceClear remasterStartupSurfaceClear;
 	Settings::ResolutionScale resolutionScale;
 	Settings::ResolutionScaleFilter resolutionScaleFilter;
 	Settings::SoftwareDevice softwareDevice;

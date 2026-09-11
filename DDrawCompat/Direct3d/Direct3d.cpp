@@ -53,6 +53,28 @@ namespace
 				surface->setSizeOverride(0, 0);
 			}
 		}
+		if (FAILED(result) && lplpD3DDevice)
+		{
+			LOG_INFO << "MW3 Remaster: Direct3D device creation failed (HRESULT="
+				<< Compat::hex(result) << "); retrying in-process";
+			static constexpr DWORD retryDelaysMs[] = { 100, 250, 500, 1000, 2000 };
+			for (DWORD retry = 0; retry < _countof(retryDelaysMs); ++retry)
+			{
+				Sleep(retryDelaysMs[retry]);
+				*lplpD3DDevice = nullptr;
+				result = getOrigVtable(This).CreateDevice(This, iid, lpDDS, lplpD3DDevice, params...);
+				if (SUCCEEDED(result))
+				{
+					LOG_INFO << "MW3 Remaster: Direct3D device creation recovered on retry " << retry + 1;
+					break;
+				}
+			}
+			if (FAILED(result))
+			{
+				LOG_INFO << "MW3 Remaster: Direct3D device retries exhausted (HRESULT="
+					<< Compat::hex(result) << ')';
+			}
+		}
 
 		if constexpr (std::is_same_v<TDirect3d, IDirect3D7>)
 		{

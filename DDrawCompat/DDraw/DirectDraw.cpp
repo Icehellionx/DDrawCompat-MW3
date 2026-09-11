@@ -23,6 +23,7 @@
 #include <DDraw/Surfaces/PrimarySurface.h>
 #include <DDraw/Surfaces/TagSurface.h>
 #include <DDraw/Visitors/DirectDrawVtblVisitor.h>
+#include <Gdi/Cursor.h>
 #include <Gdi/WinProc.h>
 #include <Win32/DisplayMode.h>
 #include <Win32/Thread.h>
@@ -34,6 +35,72 @@ namespace
 
 	LRESULT handleActivateApp(HWND hwnd, WPARAM wParam, LPARAM lParam, WNDPROC origWndProc);
 	LRESULT handleSize(HWND hwnd, WPARAM wParam, LPARAM lParam);
+
+	bool isDirect3dInterface(REFIID iid)
+	{
+		return IID_IDirect3D == iid || IID_IDirect3D2 == iid ||
+			IID_IDirect3D3 == iid || IID_IDirect3D7 == iid;
+	}
+
+	template <typename TDirectDraw>
+	HRESULT STDMETHODCALLTYPE QueryInterface(TDirectDraw* This, REFIID iid, void** object)
+	{
+		HRESULT result = getOrigVtable(This).QueryInterface(This, iid, object);
+		if (FAILED(result) && object && isDirect3dInterface(iid))
+		{
+			LOG_INFO << "MW3 Remaster: Direct3D interface acquisition failed (HRESULT="
+				<< Compat::hex(result) << "); retrying in-process";
+			static constexpr DWORD retryDelaysMs[] = { 100, 250, 500, 1000, 2000 };
+			for (DWORD retry = 0; retry < _countof(retryDelaysMs); ++retry)
+			{
+				Sleep(retryDelaysMs[retry]);
+				*object = nullptr;
+				result = getOrigVtable(This).QueryInterface(This, iid, object);
+				if (SUCCEEDED(result))
+				{
+					LOG_INFO << "MW3 Remaster: Direct3D interface acquisition recovered on retry "
+						<< retry + 1;
+					break;
+				}
+			}
+			if (FAILED(result))
+			{
+				LOG_INFO << "MW3 Remaster: Direct3D interface retries exhausted (HRESULT="
+					<< Compat::hex(result) << ')';
+			}
+		}
+		return result;
+	}
+
+	template <typename TDirectDraw>
+	HRESULT STDMETHODCALLTYPE CreateClipper(TDirectDraw* This, DWORD flags,
+		LPDIRECTDRAWCLIPPER* clipper, IUnknown* outer)
+	{
+		HRESULT result = getOrigVtable(This).CreateClipper(This, flags, clipper, outer);
+		if (FAILED(result) && clipper)
+		{
+			LOG_INFO << "MW3 Remaster: DirectDraw clipper creation failed (HRESULT="
+				<< Compat::hex(result) << "); retrying in-process";
+			static constexpr DWORD retryDelaysMs[] = { 100, 250, 500, 1000, 2000 };
+			for (DWORD retry = 0; retry < _countof(retryDelaysMs); ++retry)
+			{
+				Sleep(retryDelaysMs[retry]);
+				*clipper = nullptr;
+				result = getOrigVtable(This).CreateClipper(This, flags, clipper, outer);
+				if (SUCCEEDED(result))
+				{
+					LOG_INFO << "MW3 Remaster: DirectDraw clipper creation recovered on retry " << retry + 1;
+					break;
+				}
+			}
+			if (FAILED(result))
+			{
+				LOG_INFO << "MW3 Remaster: DirectDraw clipper retries exhausted (HRESULT="
+					<< Compat::hex(result) << ')';
+			}
+		}
+		return result;
+	}
 
 	template <typename TDirectDraw>
 	HRESULT STDMETHODCALLTYPE CreatePalette(TDirectDraw* This, DWORD dwFlags, LPPALETTEENTRY lpDDColorArray,
@@ -217,6 +284,30 @@ namespace
 		{
 		case WM_ACTIVATEAPP:
 			return LOG_RESULT(handleActivateApp(hwnd, wParam, lParam, Gdi::WinProc::getDDrawOrigWndProc(hwnd)));
+		case WM_MOUSEACTIVATE:
+			if (Config::Settings::AltTabFix::KEEPVIDMEM == Config::altTabFix.get() &&
+				Config::altTabFix.getParam())
+			{
+				ShowWindow(hwnd, IsIconic(hwnd) ? SW_RESTORE : SW_SHOW);
+				SetForegroundWindow(hwnd);
+				SetActiveWindow(hwnd);
+				SetFocus(hwnd);
+				return LOG_RESULT(MA_ACTIVATE);
+			}
+			break;
+		case WM_SETCURSOR:
+			if (Config::Settings::AltTabFix::KEEPVIDMEM == Config::altTabFix.get() &&
+				Config::altTabFix.getParam() && HTCLIENT == LOWORD(lParam) &&
+				DDraw::RealPrimarySurface::isProcessActive())
+			{
+				// Windows reapplies the previous foreground application's arrow on
+				// mouse movement after Alt-Tab. MW3 draws its own pointer, so keep
+				// the system cursor hidden for the active game client only.
+				Gdi::Cursor::setSystemCursorHidden(true);
+				LOG_ONCE("MW3 Remaster: suppressing the Windows cursor over the active game client");
+				return LOG_RESULT(TRUE);
+			}
+			break;
 		case WM_SIZE:
 			return LOG_RESULT(handleSize(hwnd, wParam, lParam));
 		}
@@ -307,6 +398,39 @@ namespace
 				result = LOG_RESULT(CallWindowProcA(origWndProc, hwnd, WM_ACTIVATEAPP, wParam, lParam));
 			}
 		}
+		else if (Config::Settings::AltTabFix::KEEPVIDMEM == Config::altTabFix.get() &&
+			Config::altTabFix.getParam())
+		{
+			if (wParam)
+			{
+				result = g_origDDrawWindowProc(hwnd, WM_ACTIVATEAPP, wParam, lParam);
+				// MW3 restores the Windows arrow while inactive. Hide that system
+				// cursor once DirectDraw regains focus; the game continues to own
+				// clipping and any later cursor changes through its normal APIs.
+				Gdi::Cursor::setSystemCursorHidden(true);
+			}
+			else
+			{
+				Gdi::Cursor::setSystemCursorHidden(false);
+				// Pause MW3 without running DirectDraw's destructive fullscreen
+				// deactivation path, which minimizes or greys the game surface.
+				ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+				result = LOG_RESULT(CallWindowProcA(origWndProc, hwnd, WM_ACTIVATEAPP, wParam, lParam));
+				ReleaseCapture();
+				CALL_ORIG_FUNC(ClipCursor)(nullptr);
+				// Change z-order only after Windows has transferred focus. Doing this
+				// during fullscreen creation disrupts MW3's startup AVI initialization.
+				CALL_ORIG_FUNC(SetWindowPos)(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+					SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOSENDCHANGING | SWP_NOREDRAW);
+				const HWND presentationWindow = DDraw::RealPrimarySurface::getPresentationWindow();
+				if (presentationWindow)
+				{
+					CALL_ORIG_FUNC(SetWindowPos)(presentationWindow, HWND_NOTOPMOST, 0, 0, 0, 0,
+						SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOSENDCHANGING | SWP_NOREDRAW);
+				}
+				DDraw::RealPrimarySurface::scheduleUpdate(true);
+			}
+		}
 		else
 		{
 			result = g_origDDrawWindowProc(hwnd, WM_ACTIVATEAPP, wParam, lParam);
@@ -358,6 +482,8 @@ namespace
 	template <typename Vtable>
 	constexpr void setCompatVtable(Vtable& vtable)
 	{
+		vtable.QueryInterface = &QueryInterface;
+		vtable.CreateClipper = &CreateClipper;
 		vtable.CreatePalette = &CreatePalette;
 		vtable.CreateSurface = &CreateSurface;
 		vtable.FlipToGDISurface = &FlipToGDISurface;

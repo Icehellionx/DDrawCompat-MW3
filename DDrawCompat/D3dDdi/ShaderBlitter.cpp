@@ -1,6 +1,8 @@
 #include <Common/Log.h>
 #include <Common/Rect.h>
 #include <Config/Settings/DisplayFilter.h>
+#include <Config/Settings/RemasterIntroChromaCleanup.h>
+#include <Config/Settings/RemasterPresentationOverscan.h>
 #include <D3dDdi/Adapter.h>
 #include <D3dDdi/Device.h>
 #include <D3dDdi/Log/CommonLog.h>
@@ -26,6 +28,7 @@
 #include <Shaders/DepthWrite16.h>
 #include <Shaders/DepthWrite24.h>
 #include <Shaders/DrawCursor.h>
+#include <Shaders/IntroChromaCleanup.h>
 #include <Shaders/Lanczos.h>
 #include <Shaders/LockRef.h>
 #include <Shaders/PaletteLookup.h>
@@ -117,6 +120,8 @@ namespace D3dDdi
 		, m_psDepthWrite16(createPixelShader(g_psDepthWrite16))
 		, m_psDepthWrite24(createPixelShader(g_psDepthWrite24))
 		, m_psDrawCursor(createPixelShader(g_psDrawCursor))
+		, m_psIntroChromaCleanup(Config::remasterIntroChromaCleanup.get()
+			? createPixelShader(g_psIntroChromaCleanup) : DeviceState::TempShader{})
 		, m_psLanczos(createPixelShader(g_psLanczos))
 		, m_psLockRef(createPixelShader(g_psLockRef))
 		, m_psPaletteLookup(createPixelShader(g_psPaletteLookup))
@@ -714,6 +719,56 @@ namespace D3dDdi
 			m_metaShader.render(dstResource, dstSubResourceIndex, dstRect, srcResource, srcSubResourceIndex, srcRect);
 			break;
 		}
+
+		// Repair only the corrupt presentation border by replacing it with the
+		// nearest known-clean interior pixels. This runs after the selected scale
+		// filter and does not affect device creation or source game surfaces.
+		const auto edgeRepair = Config::remasterPresentationOverscan.get();
+		if (0 < edgeRepair && 2 * edgeRepair < srcRect.bottom - srcRect.top &&
+			2 * edgeRepair < srcRect.right - srcRect.left)
+		{
+			const RECT topDst = { dstRect.left, dstRect.top,
+				dstRect.right, dstRect.top + edgeRepair };
+			const RECT topSrc = { srcRect.left, srcRect.top + edgeRepair,
+				srcRect.right, srcRect.top + 2 * edgeRepair };
+			pointBlt(dstResource, dstSubResourceIndex, topDst,
+				srcResource, srcSubResourceIndex, topSrc);
+
+			const RECT leftDst = { dstRect.left, dstRect.top,
+				dstRect.left + edgeRepair, dstRect.bottom };
+			const RECT leftSrc = { srcRect.left + edgeRepair, srcRect.top,
+				srcRect.left + 2 * edgeRepair, srcRect.bottom };
+			pointBlt(dstResource, dstSubResourceIndex, leftDst,
+				srcResource, srcSubResourceIndex, leftSrc);
+
+			const RECT cornerDst = { dstRect.left, dstRect.top,
+				dstRect.left + edgeRepair, dstRect.top + edgeRepair };
+			const RECT cornerSrc = { srcRect.left + edgeRepair, srcRect.top + edgeRepair,
+				srcRect.left + 2 * edgeRepair, srcRect.top + 2 * edgeRepair };
+			pointBlt(dstResource, dstSubResourceIndex, cornerDst,
+				srcResource, srcSubResourceIndex, cornerSrc);
+		}
+	}
+
+	void ShaderBlitter::introChromaCleanupBlt(const Resource& dstResource, UINT dstSubResourceIndex,
+		const RECT& dstRect, const Resource& srcResource, UINT srcSubResourceIndex, const RECT& srcRect)
+	{
+		if (!m_psIntroChromaCleanup.shader)
+		{
+			return;
+		}
+		const auto& srcSurface = srcResource.getFixedDesc().pSurfList[srcSubResourceIndex];
+		const DeviceState::ShaderConstF texelSize =
+		{
+			1.0f / srcSurface.Width,
+			1.0f / srcSurface.Height,
+			0,
+			0
+		};
+		const D3DDDIARG_SETPIXELSHADERCONST psConst = { 200, 1 };
+		m_device.getOrigVtable().pfnSetPixelShaderConst(m_device, &psConst, &texelSize[0]);
+		blt(dstResource, dstSubResourceIndex, dstRect, srcResource, srcSubResourceIndex, srcRect,
+			m_psIntroChromaCleanup, D3DTEXF_POINT);
 	}
 
 	void ShaderBlitter::drawRect(const RectF& rect)

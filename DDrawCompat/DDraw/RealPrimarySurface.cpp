@@ -9,10 +9,12 @@
 #include <Common/ScopedThreadPriority.h>
 #include <Common/Time.h>
 #include <Config/AtomicSetting.h>
+#include <Config/Settings/AltTabFix.h>
 #include <Config/Settings/FpsLimiter.h>
 #include <Config/Settings/FullscreenMode.h>
 #include <Config/Settings/GdiInterops.h>
 #include <Config/Settings/PresentDelay.h>
+#include <Config/Settings/RemasterStartupSurfaceClear.h>
 #include <Config/Settings/VSync.h>
 #include <D3dDdi/Device.h>
 #include <D3dDdi/KernelModeThunks.h>
@@ -30,6 +32,7 @@
 #include <Gdi/Cursor.h>
 #include <Gdi/DcFunctions.h>
 #include <Gdi/GuiThread.h>
+#include <Gdi/PresentationWindow.h>
 #include <Gdi/VirtualScreen.h>
 #include <Gdi/Window.h>
 #include <Input/Input.h>
@@ -93,6 +96,47 @@ namespace
 			backBuffer->GetAttachedSurface(backBuffer, &caps, &lastSurface.getRef());
 		}
 		return lastSurface;
+	}
+
+	HRESULT clearSurfaceToBlack(CompatRef<IDirectDrawSurface7> surface)
+	{
+		DDBLTFX fx = {};
+		fx.dwSize = sizeof(fx);
+		fx.dwFillColor = 0;
+		return surface->Blt(&surface, nullptr, nullptr, nullptr,
+			DDBLT_COLORFILL | DDBLT_WAIT, &fx);
+	}
+
+	void clearStartupSurfacesToBlack()
+	{
+		if (!Config::remasterStartupSurfaceClear.get() || !g_frontBuffer)
+		{
+			return;
+		}
+
+		HRESULT result = clearSurfaceToBlack(*g_frontBuffer);
+		auto backBuffer = getBackBuffer();
+		if (backBuffer)
+		{
+			const HRESULT backResult = clearSurfaceToBlack(*backBuffer);
+			if (FAILED(backResult)) result = backResult;
+		}
+		auto lastSurface = getLastSurface();
+		if (lastSurface && lastSurface.get() != backBuffer.get())
+		{
+			const HRESULT lastResult = clearSurfaceToBlack(*lastSurface);
+			if (FAILED(lastResult)) result = lastResult;
+		}
+
+		if (SUCCEEDED(result))
+		{
+			LOG_INFO << "MW3 Remaster: initialized startup presentation surfaces to black";
+		}
+		else
+		{
+			LOG_INFO << "MW3 Remaster: startup presentation surface clear failed (HRESULT="
+				<< Compat::hex(result) << ')';
+		}
 	}
 
 	UINT getFlipInterval(DWORD flags)
@@ -373,6 +417,7 @@ namespace
 		LOG_FUNC("RealPrimarySurface::updatePresentationParams");
 
 		HWND fullscreenWindow = nullptr;
+		bool isInactivePresentation = false;
 		if (DDraw::RealPrimarySurface::isProcessActive())
 		{
 			if (g_isFullscreen && IsWindowVisible(g_deviceWindow) && !IsIconic(g_deviceWindow))
@@ -386,13 +431,22 @@ namespace
 		}
 		else if (g_isFullscreen)
 		{
-			setFullscreenPresentationMode({});
-			if (g_prevPresentationWindow)
+			if (Config::Settings::AltTabFix::KEEPVIDMEM == Config::altTabFix.get() &&
+				Config::altTabFix.getParam() && IsWindowVisible(g_deviceWindow) && !IsIconic(g_deviceWindow))
 			{
-				Gdi::GuiThread::destroyWindow(g_prevPresentationWindow);
-				g_prevPresentationWindow = nullptr;
+				fullscreenWindow = g_deviceWindow;
+				isInactivePresentation = true;
 			}
-			return;
+			else
+			{
+				setFullscreenPresentationMode({});
+				if (g_prevPresentationWindow)
+				{
+					Gdi::GuiThread::destroyWindow(g_prevPresentationWindow);
+					g_prevPresentationWindow = nullptr;
+				}
+				return;
+			}
 		}
 
 		HWND fullscreenPresentationWindow = nullptr;
@@ -432,7 +486,19 @@ namespace
 						SWP_NOACTIVATE | SWP_NOSENDCHANGING | SWP_NOREDRAW | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOMOVE);
 				});
 
-			setFullscreenPresentationMode(mi);
+			Gdi::PresentationWindow::setClickToActivate(g_presentationWindow, isInactivePresentation);
+
+			if (isInactivePresentation)
+			{
+				// Keep the last frame presented, but release fullscreen mouse and
+				// cursor ownership while another application has focus.
+				setFullscreenPresentationMode({});
+				Gdi::Window::setFullscreenMode(true);
+			}
+			else
+			{
+				setFullscreenPresentationMode(mi);
+			}
 		}
 		else
 		{
@@ -517,6 +583,7 @@ namespace DDraw
 		g_deviceWindowPtr = (0 != desc.dwBackBufferCount) ? DDraw::DirectDraw::getDeviceWindowPtr(dd.get()) : nullptr;
 		g_deviceWindow = g_deviceWindowPtr ? *g_deviceWindowPtr : nullptr;
 
+		clearStartupSurfacesToBlack();
 		onRestore();
 		return DD_OK;
 	}
@@ -782,6 +849,11 @@ namespace DDraw
 
 	void RealPrimarySurface::setPresentationWindowTopmost()
 	{
+		if (!isProcessActive() && Config::Settings::AltTabFix::KEEPVIDMEM == Config::altTabFix.get() &&
+			Config::altTabFix.getParam())
+		{
+			return;
+		}
 		const auto presentationWindow = g_presentationWindow ? g_presentationWindow : g_prevPresentationWindow;
 		if (presentationWindow && IsWindowVisible(presentationWindow))
 		{

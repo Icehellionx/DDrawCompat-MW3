@@ -29,6 +29,7 @@
 #include <Input/Input.h>
 #include <Overlay/Steam.h>
 #include <Win32/DisplayMode.h>
+#include <Win32/Avifil32.h>
 #include <Win32/DpiAwareness.h>
 #include <Win32/MemoryManagement.h>
 #include <Win32/Registry.h>
@@ -383,6 +384,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 		}
 
 		Input::installHooks();
+		Win32::Avifil32::installHooks();
 		Win32::MemoryManagement::installHooks();
 		Win32::Thread::installHooks();
 		Win32::Version::installHooks();

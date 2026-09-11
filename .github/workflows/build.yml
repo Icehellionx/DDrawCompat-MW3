@@ -1,0 +1,36 @@
+name: Build MW3 fork
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build Release x86
+        shell: pwsh
+        run: msbuild DDrawCompat.sln /m /p:Configuration=Release /p:Platform=x86
+
+      - name: Verify output
+        shell: pwsh
+        run: |
+          $dll = Resolve-Path 'Release\ddraw.dll'
+          Get-FileHash $dll -Algorithm SHA256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DDrawCompat-MW3-${{ github.sha }}
+          path: Release/ddraw.dll
+          if-no-files-found: error

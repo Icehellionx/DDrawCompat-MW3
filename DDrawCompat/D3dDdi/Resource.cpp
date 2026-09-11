@@ -9,6 +9,8 @@
 #include <Config/Settings/DepthFormat.h>
 #include <Config/Settings/GdiInterops.h>
 #include <Config/Settings/ResolutionScaleFilter.h>
+#include <Config/Settings/RemasterIntroChromaCleanup.h>
+#include <Config/Settings/RemasterIntroWidescreen.h>
 #include <Config/Settings/SurfacePatches.h>
 #include <D3dDdi/Adapter.h>
 #include <D3dDdi/Device.h>
@@ -23,6 +25,7 @@
 #include <Gdi/VirtualScreen.h>
 #include <Gdi/Window.h>
 #include <Overlay/Steam.h>
+#include <Win32/Avifil32.h>
 
 namespace
 {
@@ -1320,7 +1323,28 @@ namespace D3dDdi
 		LONG srcWidth = srcResource->m_fixedData.pSurfList[data.SrcSubResourceIndex].Width;
 		LONG srcHeight = srcResource->m_fixedData.pSurfList[data.SrcSubResourceIndex].Height;
 		data.SrcRect = { 0, 0, srcWidth, srcHeight };
-		data.DstRect = m_device.getAdapter().applyDisplayAspectRatio(data.DstRect, { srcWidth, srcHeight });
+		const bool isIntroVideo = Win32::Avifil32::isIntroVideoActive() && srcWidth * 3 == srcHeight * 4;
+		bool isIntroWidescreen = false;
+		LONG introMattePixels = 0;
+		if (Config::remasterIntroWidescreen.get() && isIntroVideo)
+		{
+			isIntroWidescreen = true;
+			// The 640x480 intro contains a centered widescreen image. Crop the
+			// redundant letterbox area and fill a 16:9 display without touching
+			// gameplay surfaces or the DirectDraw initialization path.
+			const LONG verticalCrop = srcHeight / 8;
+			data.SrcRect.top = verticalCrop;
+			data.SrcRect.bottom = srcHeight - verticalCrop;
+			// INTRO.AVI changes to a wider encoded frame at roughly 49 seconds.
+			// Clear only the calibrated matte inside each section.
+			introMattePixels = Win32::Avifil32::getIntroVideoSample() < 735 ? 30 : 19;
+			LOG_ONCE("MW3 Remaster: presenting INTRO.AVI as a 16:9 center crop");
+		}
+		else
+		{
+			data.DstRect = m_device.getAdapter().applyDisplayAspectRatio(
+				data.DstRect, { srcWidth, srcHeight });
+		}
 
 		auto& repo = m_device.getRepo();
 		auto& srcRtt = repo.getPresentationSourceRtt(srcWidth, srcHeight, srcResource->m_fixedData.Format);
@@ -1377,17 +1401,40 @@ namespace D3dDdi
 			copySubResourceRegion(*srcRtt.resource, 0, data.SrcRect, *srcResource, data.SrcSubResourceIndex, data.SrcRect);
 		}
 
+		Resource* presentationSrc = srcRtt.resource;
+		if (Config::remasterIntroChromaCleanup.get() && isIntroVideo)
+		{
+			const auto& cleanupRtt = repo.getNextRenderTarget(
+				srcWidth, srcHeight, srcRtt.resource->getFixedDesc().Format, srcRtt.resource, this);
+			if (cleanupRtt.resource)
+			{
+				m_device.getShaderBlitter().introChromaCleanupBlt(
+					*cleanupRtt.resource, 0, data.SrcRect, *srcRtt.resource, 0, data.SrcRect);
+				presentationSrc = cleanupRtt.resource;
+				LOG_ONCE("MW3 Remaster: applying dark-chroma cleanup to INTRO.AVI");
+			}
+		}
+
 		auto& mi = m_device.getAdapter().getMonitorInfo();
-		presentLayeredWindows(*srcRtt.resource, 0, data.SrcRect, Gdi::Window::getVisibleLayeredWindows(), mi.rcEmulated);
+		presentLayeredWindows(*presentationSrc, 0, data.SrcRect, Gdi::Window::getVisibleLayeredWindows(), mi.rcEmulated);
 
 		const auto cursorInfo = Gdi::Cursor::getEmulatedCursorInfo();
 		const bool isCursorEmulated = cursorInfo.flags == CURSOR_SHOWING && cursorInfo.hCursor;
 		if (isCursorEmulated)
 		{
-			m_device.getShaderBlitter().cursorBlt(*srcRtt.resource, 0, data.SrcRect, cursorInfo.hCursor, cursorInfo.ptScreenPos);
+			m_device.getShaderBlitter().cursorBlt(*presentationSrc, 0, data.SrcRect, cursorInfo.hCursor, cursorInfo.ptScreenPos);
 		}
 
-		m_device.getShaderBlitter().displayBlt(*this, data.DstSubResourceIndex, data.DstRect, *srcRtt.resource, 0, data.SrcRect);
+		m_device.getShaderBlitter().displayBlt(*this, data.DstSubResourceIndex, data.DstRect, *presentationSrc, 0, data.SrcRect);
+		if (isIntroWidescreen)
+		{
+			const LONG dstHeight = data.DstRect.bottom - data.DstRect.top;
+			const LONG matteHeight = MulDiv(dstHeight, introMattePixels, 360);
+			clearRectInterior(data.DstSubResourceIndex,
+				{ data.DstRect.left, data.DstRect.top, data.DstRect.right, data.DstRect.top + matteHeight });
+			clearRectInterior(data.DstSubResourceIndex,
+				{ data.DstRect.left, data.DstRect.bottom - matteHeight, data.DstRect.right, data.DstRect.bottom });
+		}
 		clearRectExterior(data.DstSubResourceIndex, data.DstRect);
 
 		presentLayeredWindows(*this, data.DstSubResourceIndex, getRect(data.DstSubResourceIndex),

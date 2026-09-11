@@ -200,6 +200,10 @@
     <ClInclude Include="Config\Settings\PalettizedTextures.h" />
     <ClInclude Include="Config\Settings\PresentDelay.h" />
     <ClInclude Include="Config\Settings\RenderColorDepth.h" />
+    <ClInclude Include="Config\Settings\RemasterIntroChromaCleanup.h" />
+    <ClInclude Include="Config\Settings\RemasterIntroWidescreen.h" />
+    <ClInclude Include="Config\Settings\RemasterPresentationOverscan.h" />
+    <ClInclude Include="Config\Settings\RemasterStartupSurfaceClear.h" />
     <ClInclude Include="Config\Settings\ResolutionScale.h" />
     <ClInclude Include="Config\Settings\ResolutionScaleFilter.h" />
     <ClInclude Include="Config\Settings\SoftwareDevice.h" />
@@ -345,6 +349,7 @@
     <ClInclude Include="Overlay\Steam.h" />
     <ClInclude Include="Overlay\Window.h" />
     <ClInclude Include="Win32\DisplayMode.h" />
+    <ClInclude Include="Win32\Avifil32.h" />
     <ClInclude Include="Win32\DpiAwareness.h" />
     <ClInclude Include="Win32\Log.h" />
     <ClInclude Include="Win32\MemoryManagement.h" />
@@ -488,6 +493,7 @@
     <ClCompile Include="Overlay\Steam.cpp" />
     <ClCompile Include="Overlay\Window.cpp" />
     <ClCompile Include="Win32\DisplayMode.cpp" />
+    <ClCompile Include="Win32\Avifil32.cpp" />
     <ClCompile Include="Win32\DpiAwareness.cpp" />
     <ClCompile Include="Win32\Log.cpp" />
     <ClCompile Include="Win32\MemoryManagement.cpp" />
@@ -530,6 +536,7 @@
     <FxCompile Include="Shaders\DepthWrite16.hlsl" />
     <FxCompile Include="Shaders\DepthWrite24.hlsl" />
     <FxCompile Include="Shaders\DrawCursor.hlsl" />
+    <FxCompile Include="Shaders\IntroChromaCleanup.hlsl" />
     <FxCompile Include="Shaders\Lanczos.hlsl" />
     <FxCompile Include="Shaders\LockRef.hlsl" />
     <FxCompile Include="Shaders\PaletteLookup.hlsl" />

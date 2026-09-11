@@ -20,6 +20,21 @@ namespace
 	LRESULT CALLBACK presentationWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	{
 		LOG_FUNC("presentationWindowProc", Compat::WindowMessageStruct(hwnd, uMsg, wParam, lParam));
+		if (WM_MOUSEACTIVATE == uMsg)
+		{
+			const HWND owner = GetParent(hwnd);
+			if (owner)
+			{
+				// Consume the click so it cannot hit the desktop or trigger a game
+				// action. The real game window performs its normal activation on its
+				// own thread; this presentation window never takes focus itself.
+				SetForegroundWindow(owner);
+				SendNotifyMessage(owner, WM_MOUSEACTIVATE,
+					reinterpret_cast<WPARAM>(owner), lParam);
+				LOG_ONCE("MW3 Remaster: forwarding inactive-frame click to the game window");
+			}
+			return LOG_RESULT(MA_NOACTIVATEANDEAT);
+		}
 		if (WM_NULL == uMsg && WM_GETTEXT == wParam && WM_SETTEXT == lParam)
 		{
 			std::wstring windowText(L"[DDrawCompat] " + getWindowText(GetParent(hwnd)));
@@ -63,6 +78,39 @@ namespace Gdi
 					}
 				});
 			return LOG_RESULT(presentationWindow);
+		}
+
+		void setClickToActivate(HWND presentationWindow, bool enable)
+		{
+			if (!presentationWindow)
+			{
+				return;
+			}
+
+			GuiThread::execute([=]()
+				{
+					const LONG exStyle = CALL_ORIG_FUNC(GetWindowLongA)(presentationWindow, GWL_EXSTYLE);
+					const bool isEnabled = IsWindowEnabled(presentationWindow) && !(exStyle & WS_EX_TRANSPARENT);
+					if (isEnabled == enable)
+					{
+						return;
+					}
+
+					EnableWindow(presentationWindow, enable);
+					CALL_ORIG_FUNC(SetWindowLongA)(presentationWindow, GWL_EXSTYLE,
+						enable ? exStyle & ~WS_EX_TRANSPARENT : exStyle | WS_EX_TRANSPARENT);
+					CALL_ORIG_FUNC(SetWindowPos)(presentationWindow, nullptr, 0, 0, 0, 0,
+						SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+						SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING | SWP_NOREDRAW);
+					if (!enable)
+					{
+						// The activation click selected this GUI thread's class cursor.
+						// Clear it here, on the thread that owns it, once the real game
+						// window has resumed input.
+						CALL_ORIG_FUNC(SetCursor)(nullptr);
+						LOG_ONCE("MW3 Remaster: clearing the presentation-thread cursor after reactivation");
+					}
+				});
 		}
 
 		void installHooks()
