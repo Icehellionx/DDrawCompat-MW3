@@ -19,9 +19,18 @@ jobs:
 
       - uses: microsoft/setup-msbuild@v2
 
+      - name: Restore pinned WDK headers
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Windows.WDK.x86 -Version 10.0.26100.1 -OutputDirectory .wdk -ExcludeVersion -NonInteractive
+          $include = Resolve-Path '.wdk\Microsoft.Windows.WDK.x86\c\Include\10.0.26100.0\um'
+          "DDRAWCOMPAT_WDK_INCLUDE=$include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Build Release x86
         shell: pwsh
-        run: msbuild DDrawCompat.sln /m /p:Configuration=Release /p:Platform=x86
+        run: |
+          $env:INCLUDE = "$env:DDRAWCOMPAT_WDK_INCLUDE;$env:INCLUDE"
+          msbuild DDrawCompat.sln /m /p:Configuration=Release /p:Platform=x86
 
       - name: Verify output
         shell: pwsh
