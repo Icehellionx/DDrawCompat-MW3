@@ -60,9 +60,10 @@ published SHA-256 before running a downloaded binary.
 ## Synchronization policy
 
 The primary remaster repository remains the source of truth for the two
-end-user INI profiles. The scheduled `sync-remaster-profiles` workflow compares
-those public files with `profiles/` and commits a synchronization update when
-they change. C++ renderer changes are developed and reviewed in this fork.
+end-user INI profiles. The hourly and manually runnable
+`sync-remaster-profiles` workflow compares those public files with `profiles/`
+and commits a synchronization update when they change. C++ renderer changes
+are developed and reviewed in this fork.
 
 Profile synchronization never creates a binary release automatically. A new
 tag and downloadable DLL are published only after interactive game-launch and
